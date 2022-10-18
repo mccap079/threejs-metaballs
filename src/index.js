@@ -39,6 +39,11 @@ let pointsAsVectors = [];
 init();
 animate();
 
+function map(value, min1, max1, min2, max2)
+{
+    return min2 + (value - min1) * (max2 - min2) / (max1 - min1);
+}
+
 // FUNCTIONS 		
 function init() {
     // SCENE
@@ -106,7 +111,7 @@ function init() {
 
     // (1) Initialize the domain - create a grid of size*size*size points in space
 
-    var size = 9;
+    var size = 18;
     var size2 = size * size;
     var size3 = size * size * size;
 
@@ -132,24 +137,24 @@ function init() {
     // (3) Add 1 to values array for points on boundary of the sphere;
     //      Negative values are inside the ball, poz are outside
 
-    addBallOld(points, values, new THREE.Vector3(0, 0, 0), canvasCubeSize / 6);
-    addBallOld(points, values, new THREE.Vector3(canvasCubeSize / 3, 0, 0), canvasCubeSize / 6);
+    addBallOld(points, values, new THREE.Vector3(-canvasCubeSize / 2, 0, 0), canvasCubeSize / 6);
+    addBallOld(points, values, new THREE.Vector3(canvasCubeSize / 2, 0, 0), canvasCubeSize / 6);
 
     var maxVal = Math.max(...values);
     var minVal = Math.min(...values);
     var medVal = (maxVal + minVal) / 2;
 
-    console.log("medVal = " + medVal);
+    console.log("maxVal = " + maxVal);
+    console.log("minVal = " + minVal);
 
     for (var i = 0; i < values.length; i++) {
-        if (values[i] > medVal) colors.push(0.3, 0, 0); //If this point is outside the ball
-        else colors.push(1, 0, 0); //If this point is inside the ball
+        colors.push(map(values[i], maxVal, minVal, 1, 0), 0, 0); //If this point is outside the ball
     }
     var pointsVisualizer_g = new THREE.BufferGeometry();
     pointsVisualizer_g.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
     pointsVisualizer_g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     pointsVisualizer_g.computeBoundingSphere();
-    var pointsVisualizer_m = new THREE.PointsMaterial({ size: 10, vertexColors: true });
+    var pointsVisualizer_m = new THREE.PointsMaterial({ size: 5, vertexColors: true });
     var pointsVisualizer_mesh = new THREE.Points(pointsVisualizer_g, pointsVisualizer_m);
     scene.add(pointsVisualizer_mesh);
 
@@ -161,7 +166,8 @@ function init() {
         pointsAsVectors.push(v);
     }
 
-    var geometry = marchingCubes(pointsAsVectors, values, 0.5);
+    var radius = minVal + 0.01;
+    var geometry = marchingCubes(pointsAsVectors, values, radius);
 
     colorMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00, side: THREE.DoubleSide });
     metaballsMesh = new THREE.Mesh(geometry, colorMaterial);
@@ -184,18 +190,16 @@ function update() {
 
     xPos -= 0.3;
 
-    // resetValues(values);
-    // addBall(points, values, new THREE.Vector3(0, 0, 0), canvasCubeSize / 6);
-    // addBall(points, values, new THREE.Vector3(xPos, 0, 0), canvasCubeSize / 6);
+    resetValues(values);
+    addBallOld(points, values, new THREE.Vector3(-canvasCubeSize / 2, 0, 0), canvasCubeSize / 6);
+    addBallOld(points, values, new THREE.Vector3(xPos, 0, 0), canvasCubeSize / 6);
 
-    // scene.remove(metaballsMesh);
-    // if (!doOnce) {
-    //     console.log("points = ", points);
-    //     doOnce = true;
-    // }
-    // var newGeometry = marchingCubes(pointsAsVectors, values, 0.5);
-    // metaballsMesh = new THREE.Mesh(newGeometry, colorMaterial);
-    // scene.add(metaballsMesh);
+    scene.remove(metaballsMesh);
+    var minVal = Math.min(...values);
+    var radius = minVal + 0.01;
+    var newGeometry = marchingCubes(pointsAsVectors, values, radius);
+    metaballsMesh = new THREE.Mesh(newGeometry, colorMaterial);
+    scene.add(metaballsMesh);
 }
 
 function render() {
@@ -211,19 +215,31 @@ function resetValues(values) {
 
 
 // add values corresponding to a ball with radius 1 to values array
+// min vals should be at the beginning of the logarithm, condensed the larger they get
 function addBallOld(points, values, center, radius) {
     let j = 0;
+    // console.log("points ", points);
+    // console.log("values ", values);
     for (var i = 0; i < values.length; i++) {
         var pointAsVector = new THREE.Vector3(points[j], points[j + 1], points[j + 2]);
-        var OneMinusD2 = 1.0 - center.distanceToSquared(pointAsVector);
-        console.log(i + " --------- Old value = " + (-(OneMinusD2 * OneMinusD2)));
-
-        values[i] += Math.exp(-(OneMinusD2 * OneMinusD2));
-        console.log("New value = " + values[i]);
+        // console.log(i + " pointAsVector ", pointAsVector);
+        // var OneMinusD2 = 1.0 - center.distanceToSquared(pointAsVector);
+        var OneMinusD2 = center.distanceTo(pointAsVector) * 1.4;
+        // console.log("OneMinusD2 ", OneMinusD2);
+        // console.log("OneMinusD2 * OneMinusD2 ", -(OneMinusD2 * OneMinusD2));
+        // values[i] += Math.exp(-(OneMinusD2 * OneMinusD2));
+        values[i] += f(OneMinusD2);
+        //values[i] += OneMinusD2;
+        // console.log("value " + values[i]);
 
         j += 3;
     }
 }
+
+//https://stackoverflow.com/a/22511380/1757149
+function f(x) {
+    return Math.pow(Math.E, Math.floor(Math.log(x) / Math.E));
+  }
 
 
 // add values corresponding to a ball with radius 1 to values array
@@ -255,7 +271,7 @@ function marchingCubes(points, values, isolevel) {
     // console.log("points = ", points);
     // console.log("values = ", points);
 
-    isolevel = 4.0;
+    // isolevel = 540.0;
     var size = Math.round(Math.pow(values.length, 1 / 3));
     var size2 = size * size;
     var size3 = size * size * size;

@@ -1,78 +1,65 @@
-import * as THREE from 'three';
+import * as THREE from './three.module.js';
 import Stats from 'three/examples/jsm/libs/stats.module';
 import Detector from './detector.js';
-import edgeTable from './edgeTable.js'
-import triTable from './triTable.js'
-import ConvexHull from 'three/examples/jsm/math/ConvexHull.js'
-import { Face3 } from './Geometry.js'
+import edgeTable from './edgeTable.js';
+import triTable from './triTable.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { GUI } from 'dat.gui';
+/*
+    Three.js "tutorials by example"
+    Author: Lee Stemkoski
+    Date: July 2013 (three.js v59dev)
+*/
+
+// MAIN
 
 // standard global variables for Three.js
-var container, scene, camera, renderer, stats, controls;
+var scene, camera, renderer, controls, stats, gui, parameters;
 var clock = new THREE.Clock();
 
-var width, height, canvasCubeSize;
-if (window.innerHeight >= window.innerWidth) {
-    var width = window.innerWidth;
-    var height = window.innerWidth;
-    canvasCubeSize = height * 0.6;
-} else {
-    var width = window.innerHeight;
-    var height = window.innerHeight;
-    canvasCubeSize = width * 0.6;
-}
-
-var metaballsMesh, colorMaterial;
-var xPos = canvasCubeSize / 3;
-var values = [];
-var points = [];
-let pointsAsVectors = [];
-
-/////////////////////////////////////
-// Marching cubes lookup tables
-/////////////////////////////////////
-
-// These tables are straight from Paul Bourke's page:
-// http://paulbourke.net/geometry/polygonise/
-// who in turn got them from Cory Gene Bloyd.
+// ball params
+var bawlsMesh;
+var colorMaterial = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+var points;
+var values;
+var radius = 1; //10
+var fieldSz = 5; //10
+var fieldIncrements = 30; //30
+var isoLevel = 0.5; //0.1
+var ballsPos = [];
 
 init();
 animate();
 
-function map(value, min1, max1, min2, max2)
-{
-    return min2 + (value - min1) * (max2 - min2) / (max1 - min1);
-}
+
 
 // FUNCTIONS 		
 function init() {
     // SCENE
     scene = new THREE.Scene();
     // CAMERA
-    camera = new THREE.OrthographicCamera(width / -2, width / 2, height / 2, height / -2, 1, 5000);
+    var SCREEN_WIDTH = window.innerWidth, SCREEN_HEIGHT = window.innerHeight;
+    var VIEW_ANGLE = 45, ASPECT = SCREEN_WIDTH / SCREEN_HEIGHT, NEAR = 0.1, FAR = 20000;
+    camera = new THREE.PerspectiveCamera(VIEW_ANGLE, ASPECT, NEAR, FAR);
     scene.add(camera);
-    // camera.position.set(10, 5, 10);
-    camera.position.set(canvasCubeSize, canvasCubeSize, canvasCubeSize);
+    camera.position.set(10, 5, 10);
     camera.lookAt(scene.position);
-
-    //create boundary box
-    var boundCube_geom = new THREE.BoxGeometry(canvasCubeSize, canvasCubeSize, canvasCubeSize);
-    var boundCube_mat = new THREE.MeshBasicMaterial({
-        wireframe: true,
-        visible: true,
-        color: 0xffffff
-    });
-    // boundCube_mat.visible = true;
-    var boundCube_mesh = new THREE.Mesh(boundCube_geom, boundCube_mat);
-    scene.add(boundCube_mesh);
-
     // RENDERER
     if (Detector.webgl)
-        renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
+        renderer = new THREE.WebGLRenderer({ antialias: true });
     else
         renderer = new THREE.CanvasRenderer();
-    renderer.setSize(width, height);
+    renderer.setSize(SCREEN_WIDTH, SCREEN_HEIGHT);
     document.body.appendChild(renderer.domElement);
+    // EVENTS
+    // CONTROLS
+    controls = new OrbitControls(camera, renderer.domElement);
+    // STATS
+    stats = new Stats();
+    stats.domElement.style.position = 'absolute';
+    stats.domElement.style.bottom = '0px';
+    stats.domElement.style.zIndex = 100;
+    document.body.appendChild(stats.domElement);
     // LIGHT
     var light = new THREE.PointLight(0xff0000);
     light.position.set(10, 0, 0);
@@ -93,8 +80,106 @@ function init() {
     // CUSTOM //
     ////////////
 
-    var axisMin = -(canvasCubeSize / 2);
-    var axisMax = canvasCubeSize / 2;
+    var field = setField();
+
+    points = field.points;
+
+    values = [];
+    // initialize values
+    for (var i = 0; i < field.size3; i++) values[i] = 0;
+
+    // resetValues();
+    //addBall(points, values, new THREE.Vector3(0, 3.5, 0));
+    addBall(points, values, new THREE.Vector3(0, 0, 0), radius);
+    addBall(points, values, new THREE.Vector3(0, 0, 0), radius);
+    addBall(points, values, new THREE.Vector3(0, 0, 0), radius);
+
+
+    var max = Math.max(...values);
+    var min = Math.min(...values);
+    console.log("max ", max);
+    console.log("min ", min);
+
+    var geometry = marchingCubes(field.points, values, isoLevel);
+    console.log("init:: values = ", values);
+
+    bawlsMesh = new THREE.Mesh(geometry, colorMaterial);
+
+    scene.add(bawlsMesh);
+    // GUI for experimenting with parameters
+
+    gui = new GUI();
+    parameters = { a: isoLevel, c: false, d: radius, e: 10.0, f: 30.0 };
+    //0.000     // 1.100    // 0.001
+    var aGUI = gui.add(parameters, 'a').min(0.00000000001).max(1).step(0.001).name("isoLevel").listen();
+    aGUI.onChange(
+        function (value) {
+            scene.remove(bawlsMesh);
+            isoLevel = parameters.a;
+            var newGeometry = marchingCubes(points, values, isoLevel);
+            bawlsMesh = new THREE.Mesh(newGeometry, colorMaterial);
+            scene.add(bawlsMesh);
+        }
+    );
+
+    var cGUI = gui.add(parameters, 'c').name("animate values");
+
+    var dGUI = gui.add(parameters, 'd').min(1.0).max(400.0).step(0.01).name("radius").listen();
+    dGUI.onChange(
+        function (value) {
+            resetValues(values);
+            radius = parameters.d;
+            addBall(points, values, new THREE.Vector3(0, 0, 0), radius);
+            addBall(points, values, new THREE.Vector3(0, 0, 0), radius);
+
+            scene.remove(bawlsMesh);
+            var newGeometry = marchingCubes(points, values, isoLevel);
+            bawlsMesh = new THREE.Mesh(newGeometry, colorMaterial);
+            scene.add(bawlsMesh);
+        }
+    );
+
+    var eGUI = gui.add(parameters, 'e').min(10.0).max(100.0).step(1).name("fieldSz").listen();
+    eGUI.onChange(
+        function (value) {
+            fieldSz = parameters.e;
+            var field = setField();
+            points = field.points;
+            resetValues(values);
+            addBall(points, values, new THREE.Vector3(0, 0, 0), radius);
+            addBall(points, values, new THREE.Vector3(0, 0, 0), radius);
+
+            scene.remove(bawlsMesh);
+            var newGeometry = marchingCubes(points, values, isoLevel);
+            bawlsMesh = new THREE.Mesh(newGeometry, colorMaterial);
+            scene.add(bawlsMesh);
+        }
+    );
+
+    var fGUI = gui.add(parameters, 'f').min(10.0).max(100.0).step(1).name("fieldIncrements").listen();
+    fGUI.onChange(
+        function (value) {
+            fieldIncrements = parameters.f;
+            var field = setField();
+            points = field.points;
+            // initialize values
+            values.length = field.size3;
+            resetValues(values);
+            addBall(points, values, new THREE.Vector3(0, 0, 0), radius);
+            addBall(points, values, new THREE.Vector3(0, 0, 0), radius);
+
+            scene.remove(bawlsMesh);
+            var newGeometry = marchingCubes(points, values, isoLevel);
+            bawlsMesh = new THREE.Mesh(newGeometry, colorMaterial);
+            scene.add(bawlsMesh);
+        }
+    );
+
+}
+
+function setField() {
+    var axisMin = -fieldSz;
+    var axisMax = fieldSz;
     var axisRange = axisMax - axisMin;
 
     scene.add(new THREE.AxisHelper(axisMax));
@@ -108,14 +193,11 @@ function init() {
     // (4) Repeat step (3) as desired
     // (5) Implement Marching Cubes algorithm with isovalue slightly less than 1.
 
-
-    // (1) Initialize the domain - create a grid of size*size*size points in space
-
-    var size = 18;
+    var size = fieldIncrements;
     var size2 = size * size;
     var size3 = size * size * size;
 
-    var colors = [];
+    var points = [];
 
     // generate the list of 3D points
     for (var k = 0; k < size; k++) {
@@ -124,57 +206,12 @@ function init() {
                 var x = axisMin + axisRange * i / (size - 1);
                 var y = axisMin + axisRange * j / (size - 1);
                 var z = axisMin + axisRange * k / (size - 1);
-                points.push(x, y, z);
+                points.push(new THREE.Vector3(x, y, z));
             }
         }
     }
 
-    // (2) Initialize the range  - a set of values, corresponding to each of the points, to zero.
-
-    // initialize values
-    for (var i = 0; i < size3; i++) values[i] = 0;
-
-    // (3) Add 1 to values array for points on boundary of the sphere;
-    //      Negative values are inside the ball, poz are outside
-
-    addBallOld(points, values, new THREE.Vector3(-canvasCubeSize / 2, 0, 0), canvasCubeSize / 6);
-    addBallOld(points, values, new THREE.Vector3(canvasCubeSize / 2, 0, 0), canvasCubeSize / 6);
-
-    var maxVal = Math.max(...values);
-    var minVal = Math.min(...values);
-    var medVal = (maxVal + minVal) / 2;
-
-    console.log("maxVal = " + maxVal);
-    console.log("minVal = " + minVal);
-
-    for (var i = 0; i < values.length; i++) {
-        colors.push(map(values[i], maxVal, minVal, 1, 0), 0, 0); //If this point is outside the ball
-    }
-    var pointsVisualizer_g = new THREE.BufferGeometry();
-    pointsVisualizer_g.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
-    pointsVisualizer_g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    pointsVisualizer_g.computeBoundingSphere();
-    var pointsVisualizer_m = new THREE.PointsMaterial({ size: 5, vertexColors: true });
-    var pointsVisualizer_mesh = new THREE.Points(pointsVisualizer_g, pointsVisualizer_m);
-    scene.add(pointsVisualizer_mesh);
-
-    // (5) Implement Marching Cubes algorithm with isovalue slightly less than 1.
-
-    // isolevel = 0.5;
-    for (let i = 0; i < points.length; i += 3) {
-        var v = new THREE.Vector3(points[i], points[i + 1], points[i + 2]);
-        pointsAsVectors.push(v);
-    }
-
-    var radius = minVal + 0.01;
-    var geometry = marchingCubes(pointsAsVectors, values, radius);
-
-    colorMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00, side: THREE.DoubleSide });
-    metaballsMesh = new THREE.Mesh(geometry, colorMaterial);
-    scene.add(metaballsMesh);
-
-    controls = new OrbitControls(camera, renderer.domElement);
-
+    return { size3, points };
 }
 
 function animate() {
@@ -183,23 +220,53 @@ function animate() {
     update();
 }
 
-var doOnce = false;
-
 function update() {
     controls.update();
+    stats.update();
 
-    xPos -= 0.3;
+    // animation
+    if (parameters.c) {
+        var t = clock.getElapsedTime();
+        var offset = 0.0;
+        var speed = 1.0;
+        var amplitude = 1.5;
+        ballsPos[0] = [
+            offset + Math.sin(t * speed) * amplitude,
+            offset + Math.sin(t * (speed / 1.73)) * amplitude,
+            offset + Math.sin(t * (speed / 0.87)) * amplitude
+        ];
 
+        ballsPos[1] = [
+            offset + Math.sin(t * (speed * 1.3)) * amplitude / 2,
+            offset + Math.sin(t * (speed * 0.9)) * amplitude / 2,
+            offset + Math.sin(t * (speed / 0.5)) * amplitude / 2];
+
+        ballsPos[2] = [
+            offset + Math.sin(t * (speed * 3.2)) * amplitude,
+            offset + Math.sin(t * (speed * 1.8)) * amplitude,
+            offset + Math.sin(t * (speed * 0.3)) * amplitude];
+
+        ballsPos[3] = [
+            offset + Math.sin(t * (speed * 4.1)) * amplitude,
+            offset + Math.sin(t * (speed * 2.2)) * amplitude,
+            offset + Math.sin(t * (speed * 5.1)) * amplitude];
+
+        updateBallsPos(ballsPos);
+    }
+}
+
+function updateBallsPos(pos) {
     resetValues(values);
-    addBallOld(points, values, new THREE.Vector3(-canvasCubeSize / 2, 0, 0), canvasCubeSize / 6);
-    addBallOld(points, values, new THREE.Vector3(xPos, 0, 0), canvasCubeSize / 6);
+    addBall(points, values, new THREE.Vector3(pos[0][0], pos[0][1], pos[0][2]), radius);
+    addBall(points, values, new THREE.Vector3(pos[1][0], pos[1][1], pos[1][2]), radius * 1.5);
+    addBall(points, values, new THREE.Vector3(pos[2][0], pos[2][1], pos[2][2]), radius * 0.5);
+    addBall(points, values, new THREE.Vector3(pos[3][0], pos[3][1], pos[3][2]), radius * 0.1);
 
-    scene.remove(metaballsMesh);
-    var minVal = Math.min(...values);
-    var radius = minVal + 0.01;
-    var newGeometry = marchingCubes(pointsAsVectors, values, radius);
-    metaballsMesh = new THREE.Mesh(newGeometry, colorMaterial);
-    scene.add(metaballsMesh);
+    //cant add and remove every scene
+    scene.remove(bawlsMesh);
+    var newGeometry = marchingCubes(points, values, isoLevel);
+    bawlsMesh = new THREE.Mesh(newGeometry, colorMaterial);
+    scene.add(bawlsMesh);
 }
 
 function render() {
@@ -213,50 +280,14 @@ function resetValues(values) {
         values[i] = 0;
 }
 
-
 // add values corresponding to a ball with radius 1 to values array
-// min vals should be at the beginning of the logarithm, condensed the larger they get
-function addBallOld(points, values, center, radius) {
-    let j = 0;
-    // console.log("points ", points);
-    // console.log("values ", values);
+function addBall(points, values, center, r) {
     for (var i = 0; i < values.length; i++) {
-        var pointAsVector = new THREE.Vector3(points[j], points[j + 1], points[j + 2]);
-        // console.log(i + " pointAsVector ", pointAsVector);
-        // var OneMinusD2 = 1.0 - center.distanceToSquared(pointAsVector);
-        var OneMinusD2 = center.distanceTo(pointAsVector) * 1.4;
-        // console.log("OneMinusD2 ", OneMinusD2);
-        // console.log("OneMinusD2 * OneMinusD2 ", -(OneMinusD2 * OneMinusD2));
-        // values[i] += Math.exp(-(OneMinusD2 * OneMinusD2));
-        values[i] += f(OneMinusD2);
-        //values[i] += OneMinusD2;
-        // console.log("value " + values[i]);
-
-        j += 3;
-    }
-}
-
-//https://stackoverflow.com/a/22511380/1757149
-function f(x) {
-    return Math.pow(Math.E, Math.floor(Math.log(x) / Math.E));
-  }
-
-
-// add values corresponding to a ball with radius 1 to values array
-// This is not adding a new set of values for every ball. It's actually adding a value to the existing value for
-// every new ball.
-function addBall(points, values, center, radius) {
-    // values = distance of each point from circle surface
-    let j = 0;
-    // For each point, calc its distance to the ball center
-    for (var i = 0; i < values.length; i++) {
-        var pointAsVector = new THREE.Vector3(points[j], points[j + 1], points[j + 2]);
-        var distFromCenter = center.distanceTo(pointAsVector);
-        var distFromSurface = distFromCenter - radius;
-        console.log(i + " -------------- distFromSurface: " + (-1 * distFromSurface));
-        values[i] += -(distFromSurface);
-        console.log("New value = " + values[i]);
-        j += 3;
+        // console.log(i + " --------- point ", points[i]);
+        var OneMinusD2 = r - center.distanceToSquared(points[i]);
+        // console.log("Dist to circle center ", center.distanceTo(points[i]));
+        // console.log("Dist to circle center squared", center.distanceToSquared(points[i]));
+        values[i] += Math.exp(-(OneMinusD2 * OneMinusD2));
     }
 }
 
@@ -266,12 +297,8 @@ function addBall(points, values, center, radius) {
 // returns: geometry
 function marchingCubes(points, values, isolevel) {
     // assumes the following global values have been defined: 
-    //   edgeTable, triTable
+    //   THREE.edgeTable, triTable
 
-    // console.log("points = ", points);
-    // console.log("values = ", points);
-
-    // isolevel = 540.0;
     var size = Math.round(Math.pow(values.length, 1 / 3));
     var size2 = size * size;
     var size3 = size * size * size;
@@ -281,16 +308,12 @@ function marchingCubes(points, values, isolevel) {
     // Actual position along edge weighted according to function values.
     var vlist = new Array(12);
 
-    var geometry = new THREE.BufferGeometry();
-    //var geometry;
-    var verts = [];
+    var geometry = new THREE.Geometry();
     var vertexIndex = 0;
 
-    for (var z = 0; z < size - 1; z++) {
-        for (var y = 0; y < size - 1; y++) {
+    for (var z = 0; z < size - 1; z++)
+        for (var y = 0; y < size - 1; y++)
             for (var x = 0; x < size - 1; x++) {
-
-                // These are the 8 points that make up the 8 corners of this cube
                 // index of base point, and also adjacent points on cube
                 var p = x + size * y + size2 * z,
                     px = p + 1,
@@ -300,15 +323,6 @@ function marchingCubes(points, values, isolevel) {
                     pxz = px + size2,
                     pyz = py + size2,
                     pxyz = pxy + size2;
-
-                // console.log("p: " + p);
-                // console.log("px: " + px);
-                // console.log("py: " + py);
-                // console.log("pxy: " + pxy);
-                // console.log("pz: " + pz);
-                // console.log("pxz: " + pxz);
-                // console.log("pyz: " + pyz);
-                // console.log("pxyz: " + pxyz);
 
                 // store scalar values corresponding to vertices
                 var value0 = values[p],
@@ -323,8 +337,6 @@ function marchingCubes(points, values, isolevel) {
                 // place a "1" in bit positions corresponding to vertices whose
                 //   isovalue is less than given constant.
 
-                //all values are GREATER THAN 0.5, and they're all IDENTICAL
-
                 var cubeindex = 0;
                 if (value0 < isolevel) cubeindex |= 1;
                 if (value1 < isolevel) cubeindex |= 2;
@@ -335,18 +347,11 @@ function marchingCubes(points, values, isolevel) {
                 if (value6 < isolevel) cubeindex |= 128;
                 if (value7 < isolevel) cubeindex |= 64;
 
-                //console.log("cube idx = " + cubeindex);
-
                 // bits = 12 bit number, indicates which edges are crossed by the isosurface
                 var bits = edgeTable[cubeindex];
 
-                //console.log("bits = ", bits);
-
                 // if none are crossed, proceed to next iteration
-                if (bits === 0) {
-                    //console.log("No bits are crossed.");
-                    continue;
-                }
+                if (bits === 0) continue;
 
                 // check which edges are crossed, and estimate the point location
                 //    using a weighted average of scalar values at edge endpoints.
@@ -357,8 +362,6 @@ function marchingCubes(points, values, isolevel) {
                 if (bits & 1) {
                     mu = (isolevel - value0) / (value1 - value0);
                     vlist[0] = points[p].clone().lerp(points[px], mu);
-                    // console.log("bottom of cube, mu = ", mu);
-                    // console.log("bottom of cube, points[px] = ", points[px]);
                 }
                 if (bits & 2) {
                     mu = (isolevel - value1) / (value3 - value1);
@@ -420,28 +423,22 @@ function marchingCubes(points, values, isolevel) {
                     var index2 = triTable[cubeindex + i + 1];
                     var index3 = triTable[cubeindex + i + 2];
 
-                    // geometry.vertices.push(vlist[index1].clone());
-                    // geometry.vertices.push(vlist[index2].clone());
-                    // geometry.vertices.push(vlist[index3].clone());
-                    verts.push(vlist[index1].clone().x, vlist[index1].clone().y, vlist[index1].clone().z);
-                    verts.push(vlist[index2].clone().x, vlist[index2].clone().y, vlist[index2].clone().z);
-                    verts.push(vlist[index3].clone().x, vlist[index3].clone().y, vlist[index3].clone().z);
+                    geometry.vertices.push(vlist[index1].clone());
+                    geometry.vertices.push(vlist[index2].clone());
+                    geometry.vertices.push(vlist[index3].clone());
+                    var face = new THREE.Face3(vertexIndex, vertexIndex + 1, vertexIndex + 2);
+                    geometry.faces.push(face);
 
-                    //console.log("verts = ", verts);
-                    /// Create a triangle from 3 verts
-                    // var face = new THREE.Vector3(vertexIndex, vertexIndex + 1, vertexIndex + 2);
-                    // geometry.faces.push(face);
-
-                    // geometry.faceVertexUvs[0].push([new THREE.Vector2(0, 0), new THREE.Vector2(0, 1), new THREE.Vector2(1, 1)]);
+                    geometry.faceVertexUvs[0].push([new THREE.Vector2(0, 0), new THREE.Vector2(0, 1), new THREE.Vector2(1, 1)]);
 
                     vertexIndex += 3;
                     i += 3;
                 }
             }
-        }
-    }
-    geometry.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
-    geometry.computeBoundingSphere();
+
+    geometry.mergeVertices();
+    geometry.computeFaceNormals();
+    geometry.computeVertexNormals();
 
     return geometry;
 }
